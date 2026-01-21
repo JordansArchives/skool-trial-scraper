@@ -78,7 +78,18 @@ try {
 
     console.log('Login completed - check debug screenshots to verify');
 
-    // Step 3: Navigate to community members page (admin view)
+    // Step 3: First navigate to the community homepage to "switch" to it
+    const communityUrl = `https://www.skool.com/${communityName}`;
+    console.log(`Navigating to community: ${communityUrl}`);
+    await page.goto(communityUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    // Take screenshot of community page
+    const communityScreenshot = await page.screenshot();
+    await Actor.setValue('debug-community-page', communityScreenshot, { contentType: 'image/png' });
+    console.log('Community page screenshot saved');
+
+    // Step 4: Now navigate to the admin members page
     const membersUrl = `https://www.skool.com/${communityName}/-/members`;
     console.log(`Navigating to members page: ${membersUrl}`);
     await page.goto(membersUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -114,7 +125,7 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(1000);
 
-    // Step 4: Scrape members with "Trial declined" status
+    // Step 5: Scrape members with "Trial declined" status
     console.log('Scanning for trial-declined members...');
 
     const trialDeclinedMembers = await page.evaluate(() => {
