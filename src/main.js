@@ -204,57 +204,71 @@ try {
         const usernameMatches = pageText.match(usernamePattern) || [];
         debugLog.push(`Found ${usernameMatches.length} @username patterns`);
 
-        // Split page into sections by looking for "Trial declined"
-        const sections = pageText.split(/(?=Trial declined)/i);
-        debugLog.push(`Found ${sections.length - 1} "Trial declined" sections`);
+        // Find all occurrences of "Trial declined" and look BACKWARD to find the member
+        // The page structure is: Name, @username, info, then "Trial declined"
+        // So we need to find Trial declined and look at the text BEFORE it
 
-        for (const section of sections) {
-            if (!section.toLowerCase().includes('trial declined')) continue;
+        const declinedRegex = /Trial declined \(removing in (\d+) days?\)/gi;
+        let match;
+        let lastIndex = 0;
 
-            // Extract username from this section
-            const usernameMatch = section.match(/@([a-z0-9-]+)/i);
-            if (!usernameMatch) {
-                debugLog.push('Section found but no username pattern');
+        while ((match = declinedRegex.exec(pageText)) !== null) {
+            const declinedIndex = match.index;
+            const daysRemaining = parseInt(match[1]);
+
+            // Get text BEFORE this "Trial declined" (look back ~500 chars for member info)
+            const textBefore = pageText.substring(Math.max(0, declinedIndex - 800), declinedIndex);
+
+            debugLog.push(`Found "Trial declined" at index ${declinedIndex}, looking back...`);
+
+            // Find the LAST @username in the text before (that's the member who declined)
+            const usernameMatches = [...textBefore.matchAll(/@([a-z0-9-]+)/gi)];
+            if (usernameMatches.length === 0) {
+                debugLog.push('No username found before Trial declined');
                 continue;
             }
 
-            const username = usernameMatch[1];
+            // Get the last username match (closest to "Trial declined")
+            const lastUsernameMatch = usernameMatches[usernameMatches.length - 1];
+            const username = lastUsernameMatch[1];
+
             if (processedUsernames.has(username)) continue;
             processedUsernames.add(username);
 
-            // Try to extract name - usually appears before the @username
-            // Look for capitalized words before @
-            const beforeUsername = section.split('@')[0];
-            const nameLines = beforeUsername.split('\n').filter(l => l.trim());
-            // The name is usually a line with capitalized words
+            // Get text between this username and "Trial declined" for extracting other info
+            const usernameIndex = textBefore.lastIndexOf('@' + username);
+            const memberSection = textBefore.substring(usernameIndex) + match[0];
+
+            // Also get text before the username for the name
+            const textBeforeUsername = textBefore.substring(0, usernameIndex);
+            const linesBeforeUsername = textBeforeUsername.split('\n').filter(l => l.trim());
+
+            // Find the name - it's usually the line right before @username
             let name = null;
-            for (let i = nameLines.length - 1; i >= 0; i--) {
-                const line = nameLines[i].trim();
-                // Skip common labels
-                if (/^(Active|Joined|CHAT|ME|\d+|Invited by)/.test(line)) continue;
-                if (line.length > 2 && line.length < 50 && /^[A-Z]/.test(line)) {
+            for (let i = linesBeforeUsername.length - 1; i >= 0; i--) {
+                const line = linesBeforeUsername[i].trim();
+                // Skip common labels and short strings
+                if (/^(Active|Joined|CHAT|ME|MESSAGE|\d+|Invited by|Admin|Moderator|\$)/i.test(line)) continue;
+                if (line.length > 2 && line.length < 60 && /^[A-Z]/.test(line)) {
                     name = line;
                     break;
                 }
             }
 
-            // Extract days remaining
-            const daysMatch = section.match(/removing in (\d+) days?/i);
-            const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
-
-            // Price
-            const priceMatch = section.match(/\$(\d+)\/(month|year)/i);
+            // Price - look in the member section
+            const priceMatch = memberSection.match(/\$(\d+)\/(month|year)/i);
             const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
 
             // Join date
-            const joinMatch = section.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
+            const joinMatch = memberSection.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
             const joinDate = joinMatch ? joinMatch[1] : null;
 
-            // Last active
-            const activeMatch = section.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+(?:days?|hours?|minutes?)\s+ago)/i);
+            // Last active - also check text before username
+            const fullSection = textBeforeUsername.slice(-200) + memberSection;
+            const activeMatch = fullSection.match(/Active\s+(\d+[hmd]\s*ago|\d+\s*(?:days?|hours?|minutes?)\s*ago)/i);
             const lastActive = activeMatch ? activeMatch[1] : null;
 
-            debugLog.push(`Extracted: ${name} (@${username}), ${daysRemaining} days, ${price}`);
+            debugLog.push(`Extracted: ${name} (@${username}), ${daysRemaining} days, ${price}, joined ${joinDate}`);
 
             members.push({
                 name: name || 'Unknown',
