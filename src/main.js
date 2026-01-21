@@ -48,7 +48,34 @@ try {
     await page.goto(membersUrl, { waitUntil: 'networkidle' });
 
     // Wait for page to load
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(3000);
+
+    // Take a debug screenshot of what we see
+    const debugScreenshot = await page.screenshot({ fullPage: true });
+    await Actor.setValue('debug-members-page', debugScreenshot, { contentType: 'image/png' });
+    console.log('Debug screenshot saved to key-value store');
+
+    // Scroll down to load more members (Skool uses infinite scroll)
+    console.log('Scrolling to load all members...');
+    let previousHeight = 0;
+    let scrollAttempts = 0;
+    const maxScrollAttempts = 10;
+
+    while (scrollAttempts < maxScrollAttempts) {
+        const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+        if (currentHeight === previousHeight) {
+            break; // No more content to load
+        }
+        previousHeight = currentHeight;
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.waitForTimeout(2000);
+        scrollAttempts++;
+        console.log(`  Scroll ${scrollAttempts}/${maxScrollAttempts}...`);
+    }
+
+    // Scroll back to top
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(1000);
 
     // Step 4: Scrape members with "Trial declined" status
     console.log('Scanning for trial-declined members...');
