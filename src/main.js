@@ -135,166 +135,164 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(1000);
 
-    // Step 5: Scrape members with "Trial declined" status
+    // Step 5: Find members with "Trial declined" status and click their MEMBERSHIP button
     console.log('Scanning for trial-declined members...');
 
-    // First, let's get debug info about what's on the page
-    const debugInfo = await page.evaluate(() => {
-        const pageText = document.body.innerText;
-        const hasDeclined = pageText.toLowerCase().includes('declined');
-        const declinedMatches = pageText.match(/declined/gi) || [];
+    // Find all MEMBERSHIP buttons that are near "Trial declined" text
+    // Strategy: Find rows containing "Trial declined", then find MEMBERSHIP button in that row
+    const declinedMemberButtons = await page.evaluate(() => {
+        const buttons = [];
 
-        // Find a snippet around "declined" text
-        const declinedIndex = pageText.toLowerCase().indexOf('declined');
-        const snippet = declinedIndex >= 0
-            ? pageText.substring(Math.max(0, declinedIndex - 100), declinedIndex + 100)
-            : 'not found';
+        // Find all elements containing "Trial declined"
+        const allElements = [...document.querySelectorAll('*')];
+        const declinedElements = allElements.filter(el => {
+            const text = el.textContent || '';
+            return text.includes('Trial declined') && !el.querySelector('[class*="Trial declined"]');
+        });
 
-        // Count profile links
-        const profileLinks = document.querySelectorAll('a[href*="/u/"]');
+        // For each declined element, find the nearest MEMBERSHIP button
+        for (const el of declinedElements) {
+            // Look for specific text node to avoid duplicates
+            const hasDirectText = [...el.childNodes].some(
+                n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('Trial declined')
+            );
+            if (!hasDirectText) continue;
 
-        return {
-            hasDeclined,
-            declinedCount: declinedMatches.length,
-            snippet,
-            profileLinksCount: profileLinks.length,
-            pageTextLength: pageText.length
-        };
-    });
+            // Traverse up to find the member row container
+            let container = el;
+            for (let i = 0; i < 15; i++) {
+                if (!container.parentElement) break;
+                container = container.parentElement;
 
-    console.log('Debug info:');
-    console.log(`  - Page contains "declined": ${debugInfo.hasDeclined}`);
-    console.log(`  - Number of "declined" matches: ${debugInfo.declinedCount}`);
-    console.log(`  - Profile links found: ${debugInfo.profileLinksCount}`);
-    console.log(`  - Page text length: ${debugInfo.pageTextLength}`);
-    if (debugInfo.hasDeclined) {
-        console.log(`  - Text snippet around "declined": ${debugInfo.snippet}`);
-    }
-
-    const trialDeclinedMembers = await page.evaluate(() => {
-        const members = [];
-        const processedUsernames = new Set();
-        const debugLog = [];
-
-        // Get all text content
-        const pageText = document.body.innerText;
-
-        // Try multiple link selectors
-        const linkSelectors = [
-            'a[href*="/u/"]',           // Original
-            'a[href*="members"]',        // Members links
-            'a[data-testid]',            // Test IDs
-            'a[href*="@"]',              // Username links
-        ];
-
-        let allLinks = [];
-        for (const selector of linkSelectors) {
-            const links = document.querySelectorAll(selector);
-            debugLog.push(`Selector "${selector}": ${links.length} links`);
-            allLinks.push(...links);
+                // Look for MEMBERSHIP button in this container
+                const membershipBtns = container.querySelectorAll('button, [role="button"]');
+                for (const btn of membershipBtns) {
+                    if (btn.textContent.includes('MEMBERSHIP')) {
+                        // Found it! Get some identifying info
+                        const containerText = container.textContent;
+                        const usernameMatch = containerText.match(/@([a-z0-9-]+)/i);
+                        buttons.push({
+                            username: usernameMatch ? usernameMatch[1] : null,
+                            buttonIndex: [...document.querySelectorAll('button, [role="button"]')].indexOf(btn)
+                        });
+                        break;
+                    }
+                }
+                if (buttons.length > 0 && buttons[buttons.length - 1].username) break;
+            }
         }
 
-        // Also try finding all links and filtering
-        const allPageLinks = document.querySelectorAll('a');
-        debugLog.push(`Total links on page: ${allPageLinks.length}`);
+        // Dedupe by username
+        const seen = new Set();
+        return buttons.filter(b => {
+            if (!b.username || seen.has(b.username)) return false;
+            seen.add(b.username);
+            return true;
+        });
+    });
 
-        // Extract from text content using regex since links aren't working
-        // Look for pattern: name followed by @username
-        const usernamePattern = /@([a-z0-9-]+)/gi;
-        const usernameMatches = pageText.match(usernamePattern) || [];
-        debugLog.push(`Found ${usernameMatches.length} @username patterns`);
+    console.log(`Found ${declinedMemberButtons.length} trial-declined members with MEMBERSHIP buttons`);
 
-        // Find all occurrences of "Trial declined" and look BACKWARD to find the member
-        // The page structure is: Name, @username, info, then "Trial declined"
-        // So we need to find Trial declined and look at the text BEFORE it
+    const members = [];
 
-        const declinedRegex = /Trial declined \(removing in (\d+) days?\)/gi;
-        let match;
-        let lastIndex = 0;
+    // For each declined member, click their MEMBERSHIP button and extract data
+    for (let i = 0; i < declinedMemberButtons.length; i++) {
+        const { username, buttonIndex } = declinedMemberButtons[i];
+        console.log(`\nProcessing member ${i + 1}/${declinedMemberButtons.length}: @${username}`);
 
-        while ((match = declinedRegex.exec(pageText)) !== null) {
-            const declinedIndex = match.index;
-            const daysRemaining = parseInt(match[1]);
-
-            // Get text BEFORE this "Trial declined" (look back ~500 chars for member info)
-            const textBefore = pageText.substring(Math.max(0, declinedIndex - 800), declinedIndex);
-
-            debugLog.push(`Found "Trial declined" at index ${declinedIndex}, looking back...`);
-
-            // Find the LAST @username in the text before (that's the member who declined)
-            const usernameMatches = [...textBefore.matchAll(/@([a-z0-9-]+)/gi)];
-            if (usernameMatches.length === 0) {
-                debugLog.push('No username found before Trial declined');
+        try {
+            // Find and click the MEMBERSHIP button
+            const allButtons = await page.$$('button, [role="button"]');
+            if (buttonIndex >= allButtons.length) {
+                console.log('  Button index out of range, skipping');
                 continue;
             }
 
-            // Get the last username match (closest to "Trial declined")
-            const lastUsernameMatch = usernameMatches[usernameMatches.length - 1];
-            const username = lastUsernameMatch[1];
+            const membershipBtn = allButtons[buttonIndex];
+            await membershipBtn.click();
+            console.log('  Clicked MEMBERSHIP button');
 
-            if (processedUsernames.has(username)) continue;
-            processedUsernames.add(username);
+            // Wait for modal to appear
+            await page.waitForTimeout(1500);
 
-            // Get text between this username and "Trial declined" for extracting other info
-            const usernameIndex = textBefore.lastIndexOf('@' + username);
-            const memberSection = textBefore.substring(usernameIndex) + match[0];
-
-            // Also get text before the username for the name
-            const textBeforeUsername = textBefore.substring(0, usernameIndex);
-            const linesBeforeUsername = textBeforeUsername.split('\n').filter(l => l.trim());
-
-            // Find the name - it's usually the line right before @username
-            let name = null;
-            for (let i = linesBeforeUsername.length - 1; i >= 0; i--) {
-                const line = linesBeforeUsername[i].trim();
-                // Skip common labels, status text, and short strings
-                if (/^(Active|Joined|CHAT|ME|MESSAGE|\d+|Invited by|Admin|Moderator|\$|Trial|Removed|Member)/i.test(line)) continue;
-                // Skip lines that look like trial status
-                if (/trial\s*\(|ends in|removing in/i.test(line)) continue;
-                // Skip URLs
-                if (/^https?:\/\//i.test(line)) continue;
-                // Name should be capitalized words, reasonable length
-                if (line.length > 2 && line.length < 60 && /^[A-Z][a-z]/.test(line)) {
-                    name = line;
-                    break;
-                }
+            // Take screenshot of modal for debugging
+            if (i === 0) {
+                const modalScreenshot = await page.screenshot();
+                await Actor.setValue('debug-membership-modal', modalScreenshot, { contentType: 'image/png' });
             }
 
-            // Price - look in the member section
-            const priceMatch = memberSection.match(/\$(\d+)\/(month|year)/i);
-            const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
+            // Extract data from the modal
+            const memberData = await page.evaluate(() => {
+                const modalText = document.body.innerText;
 
-            // Join date
-            const joinMatch = memberSection.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
-            const joinDate = joinMatch ? joinMatch[1] : null;
+                // Extract email
+                const emailMatch = modalText.match(/Email:\s*([^\s\n]+@[^\s\n]+)/i);
+                const email = emailMatch ? emailMatch[1] : null;
 
-            // Last active - also check text before username
-            const fullSection = textBeforeUsername.slice(-200) + memberSection;
-            const activeMatch = fullSection.match(/Active\s+(\d+[hmd]\s*ago|\d+\s*(?:days?|hours?|minutes?)\s*ago)/i);
-            const lastActive = activeMatch ? activeMatch[1] : null;
+                // Extract name from modal header (usually at top)
+                // Look for "Membership settings" text and get name above it
+                const nameMatch = modalText.match(/^([A-Z][a-zA-Z\s]+)\nMembership settings/m);
+                const name = nameMatch ? nameMatch[1].trim() : null;
 
-            debugLog.push(`Extracted: ${name} (@${username}), ${daysRemaining} days, ${price}, joined ${joinDate}`);
+                // Extract role
+                const roleMatch = modalText.match(/Role:\s*(\w+)/i);
+                const role = roleMatch ? roleMatch[1] : null;
+
+                // Extract tier
+                const tierMatch = modalText.match(/Tier:\s*(\w+)/i);
+                const tier = tierMatch ? tierMatch[1] : null;
+
+                // Extract price
+                const priceMatch = modalText.match(/\$(\d+)\/(month|year)/i);
+                const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
+
+                // Extract trial status and days remaining
+                const trialMatch = modalText.match(/Trial declined \(removing in (\d+) days?\)/i);
+                const daysRemaining = trialMatch ? parseInt(trialMatch[1]) : null;
+
+                // Extract join date
+                const joinMatch = modalText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
+                const joinDate = joinMatch ? joinMatch[1] : null;
+
+                // Extract LTV
+                const ltvMatch = modalText.match(/\$(\d+)\s*lifetime value/i);
+                const ltv = ltvMatch ? `$${ltvMatch[1]}` : null;
+
+                // Extract invited by
+                const invitedMatch = modalText.match(/Invited by\s+([A-Za-z\s]+)/i);
+                const invitedBy = invitedMatch ? invitedMatch[1].trim() : null;
+
+                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy };
+            });
+
+            console.log(`  Name: ${memberData.name}`);
+            console.log(`  Email: ${memberData.email}`);
+            console.log(`  Days remaining: ${memberData.daysRemaining}`);
+            console.log(`  Price: ${memberData.price}`);
 
             members.push({
-                name: name || 'Unknown',
+                name: memberData.name || 'Unknown',
                 username,
+                email: memberData.email,
+                role: memberData.role,
+                tier: memberData.tier,
                 status: 'Trial declined',
-                daysRemaining,
-                price,
-                joinDate,
-                lastActive,
+                daysRemaining: memberData.daysRemaining,
+                price: memberData.price,
+                joinDate: memberData.joinDate,
+                ltv: memberData.ltv,
+                invitedBy: memberData.invitedBy,
                 scrapedAt: new Date().toISOString()
             });
+
+            // Close the modal by pressing Escape
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(1000);
+
+        } catch (err) {
+            console.log(`  Error processing member: ${err.message}`);
         }
-
-        return { members, debugLog };
-    });
-
-    // Log the debug info from the browser
-    console.log('Browser debug log:');
-    trialDeclinedMembers.debugLog.forEach(log => console.log(`  - ${log}`));
-
-    const members = trialDeclinedMembers.members;
+    }
 
     console.log(`Found ${members.length} members who declined their trial`);
 
