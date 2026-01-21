@@ -198,24 +198,71 @@ try {
         console.log(`    ${i + 1}. "${info.text}" - structure: ${info.structure}`);
     });
 
-    // Find usernames of declined members first (from text)
-    const declinedUsernames = await page.evaluate(() => {
-        const pageText = document.body.innerText;
-        const usernames = [];
+    // Find the member rows that contain "Trial declined" and extract their info
+    const declinedMemberInfo = await page.evaluate(() => {
+        const results = [];
 
-        // Find all "Trial declined" occurrences and extract username before each
-        const regex = /(@[a-z0-9-]+)[\s\S]{0,500}?Trial declined/gi;
-        let match;
-        while ((match = regex.exec(pageText)) !== null) {
-            usernames.push(match[1].substring(1)); // Remove @ prefix
+        // Find all elements with class containing "MemberItemWrapper" - these are member rows
+        const memberRows = document.querySelectorAll('[class*="MemberItem"], [class*="memberItem"]');
+        console.log('Found ' + memberRows.length + ' member row elements');
+
+        // If no member rows found by class, try finding by structure
+        let rows = [...memberRows];
+        if (rows.length === 0) {
+            // Find elements that contain both a username (@) and either CHAT or MEMBERSHIP
+            const allDivs = document.querySelectorAll('div');
+            rows = [...allDivs].filter(div => {
+                const text = div.textContent || '';
+                return text.includes('@') &&
+                       (text.includes('CHAT') || text.includes('MEMBERSHIP')) &&
+                       text.includes('Joined') &&
+                       text.length < 3000;
+            });
         }
 
-        return usernames;
+        console.log('Checking ' + rows.length + ' potential member rows');
+
+        for (const row of rows) {
+            const rowText = row.textContent || '';
+
+            // Check if this row has "Trial declined"
+            if (!rowText.includes('Trial declined')) continue;
+
+            // Extract username from this row
+            const usernameMatch = rowText.match(/@([a-z0-9-]+)/i);
+            if (!usernameMatch) continue;
+
+            const username = usernameMatch[1];
+
+            // Extract name - usually the first significant text in the row
+            // Look for text that looks like a name (capitalized, 2-50 chars)
+            const lines = rowText.split('\n').map(l => l.trim()).filter(l => l);
+            let name = null;
+            for (const line of lines) {
+                // Skip common non-name text
+                if (/^(Active|Joined|CHAT|MEMBERSHIP|Trial|@|Online|\$|\d+)/i.test(line)) continue;
+                if (line.length > 2 && line.length < 50 && /^[A-Z]/.test(line)) {
+                    name = line;
+                    break;
+                }
+            }
+
+            // Get days remaining
+            const daysMatch = rowText.match(/removing in (\d+) days?/i);
+            const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
+
+            results.push({ username, name, daysRemaining, rowIndex: rows.indexOf(row) });
+        }
+
+        return results;
     });
 
-    console.log(`\nFound ${declinedUsernames.length} declined member usernames: ${declinedUsernames.join(', ')}`);
+    console.log(`\nFound ${declinedMemberInfo.length} declined members:`);
+    declinedMemberInfo.forEach((m, i) => {
+        console.log(`  ${i + 1}. ${m.name} (@${m.username}) - ${m.daysRemaining} days remaining`);
+    });
 
-    const memberButtonsList = declinedUsernames.map(username => ({ username }));
+    const memberButtonsList = declinedMemberInfo;
 
     console.log(`Found ${memberButtonsList.length} trial-declined members with MEMBERSHIP buttons`);
 
@@ -223,8 +270,8 @@ try {
 
     // For each declined member, click their MEMBERSHIP button and extract data
     for (let i = 0; i < memberButtonsList.length; i++) {
-        const { username } = memberButtonsList[i];
-        console.log(`\nProcessing member ${i + 1}/${memberButtonsList.length}: @${username}`);
+        const { username, name: previewName, daysRemaining: previewDays } = memberButtonsList[i];
+        console.log(`\nProcessing member ${i + 1}/${memberButtonsList.length}: ${previewName} (@${username})`);
 
         try {
             // Strategy 1: Use Playwright's getByText to find MEMBERSHIP near this user
@@ -243,34 +290,37 @@ try {
             // Try multiple approaches to find and click MEMBERSHIP button
             let clicked = false;
 
-            // Approach 1: Try Playwright's getByRole with name
+            // Approach 1: Find the specific member row, then click its MEMBERSHIP button
             try {
-                const btn = page.getByRole('button', { name: /membership/i }).first();
-                if (await btn.count() > 0) {
-                    // Check if this button is near our username
-                    const nearUser = await page.evaluate((uname) => {
-                        const btns = [...document.querySelectorAll('button')];
-                        for (const btn of btns) {
-                            if (btn.textContent.toLowerCase().includes('membership')) {
-                                let parent = btn.parentElement;
-                                for (let i = 0; i < 10 && parent; i++) {
-                                    if (parent.textContent.includes('@' + uname)) {
-                                        return true;
-                                    }
-                                    parent = parent.parentElement;
+                clicked = await page.evaluate((uname) => {
+                    // Find the member row containing this username AND "Trial declined"
+                    const allDivs = document.querySelectorAll('div');
+                    for (const div of allDivs) {
+                        const text = div.textContent || '';
+                        // Must contain: username, Trial declined, MEMBERSHIP
+                        if (text.includes('@' + uname) &&
+                            text.includes('Trial declined') &&
+                            text.length < 3000) {
+
+                            // Find MEMBERSHIP button within this div
+                            const buttons = div.querySelectorAll('button');
+                            for (const btn of buttons) {
+                                if (btn.textContent.toUpperCase().includes('MEMBERSHIP')) {
+                                    // Scroll into view and click
+                                    btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+                                    btn.click();
+                                    return true;
                                 }
                             }
                         }
-                        return false;
-                    }, username);
-
-                    if (nearUser) {
-                        await btn.click();
-                        clicked = true;
-                        console.log('  Clicked via getByRole');
                     }
-                }
-            } catch (e) { /* continue to next approach */ }
+                    return false;
+                }, username);
+
+                if (clicked) console.log('  Clicked via row-specific search');
+            } catch (e) {
+                console.log(`  Row search error: ${e.message}`);
+            }
 
             // Approach 2: Find button with ButtonWrapper class containing MEMBERSHIP
             if (!clicked) {
@@ -368,17 +418,69 @@ try {
             }
 
             // Extract data from the modal
+            // The modal should be a popup/overlay - look for it specifically
             const memberData = await page.evaluate(() => {
-                const modalText = document.body.innerText;
+                // Find the modal - usually has a specific class or is a dialog
+                // Look for elements that appeared recently and contain "Email:" and "Membership"
+                const possibleModals = document.querySelectorAll('[class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="popup"], [class*="Popup"], [role="dialog"]');
 
-                // Extract email
+                let modalText = '';
+                let modalElement = null;
+
+                // If we found modal elements, use the one with membership content
+                for (const modal of possibleModals) {
+                    const text = modal.textContent || '';
+                    if (text.includes('Email:') && text.includes('Membership')) {
+                        modalText = text;
+                        modalElement = modal;
+                        break;
+                    }
+                }
+
+                // Fallback: look for any element containing "Email:" and membership-related text
+                if (!modalText) {
+                    const allDivs = document.querySelectorAll('div');
+                    for (const div of allDivs) {
+                        const text = div.textContent || '';
+                        if (text.includes('Email:') &&
+                            text.includes('Membership') &&
+                            text.includes('Role:') &&
+                            text.length < 2000) {
+                            modalText = text;
+                            modalElement = div;
+                            break;
+                        }
+                    }
+                }
+
+                if (!modalText) {
+                    return { error: 'Could not find modal' };
+                }
+
+                // Extract email - format is "Email: email@domain.com"
                 const emailMatch = modalText.match(/Email:\s*([^\s\n]+@[^\s\n]+)/i);
                 const email = emailMatch ? emailMatch[1] : null;
 
-                // Extract name from modal header (usually at top)
-                // Look for "Membership settings" text and get name above it
-                const nameMatch = modalText.match(/^([A-Z][a-zA-Z\s]+)\nMembership settings/m);
-                const name = nameMatch ? nameMatch[1].trim() : null;
+                // Extract name - it's at the top of the modal, before "Membership settings"
+                // Split by newlines and find the name
+                const lines = modalText.split('\n').map(l => l.trim()).filter(l => l);
+                let name = null;
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].includes('Membership settings') && i > 0) {
+                        // Name is the line before "Membership settings"
+                        name = lines[i - 1];
+                        break;
+                    }
+                }
+                // Fallback: first capitalized line that's not a label
+                if (!name) {
+                    for (const line of lines) {
+                        if (/^[A-Z][a-z]+ [A-Z][a-z]+/.test(line) && !line.includes(':')) {
+                            name = line;
+                            break;
+                        }
+                    }
+                }
 
                 // Extract role
                 const roleMatch = modalText.match(/Role:\s*(\w+)/i);
@@ -408,7 +510,7 @@ try {
                 const invitedMatch = modalText.match(/Invited by\s+([A-Za-z\s]+)/i);
                 const invitedBy = invitedMatch ? invitedMatch[1].trim() : null;
 
-                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy };
+                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy, modalFound: true };
             });
 
             console.log(`  Name: ${memberData.name}`);
