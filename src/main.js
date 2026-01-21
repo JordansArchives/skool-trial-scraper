@@ -228,12 +228,13 @@ try {
             // Check if this row has "Trial declined"
             if (!rowText.includes('Trial declined')) continue;
 
-            // Extract username from this row - stop at first non-username char
-            // Username format: @lowercase-letters-numbers-with-dashes
-            const usernameMatch = rowText.match(/@([a-z0-9-]+)(?=[^a-z0-9-]|$)/i);
+            // Extract username from this row - stop at first uppercase letter
+            // Username format: @lowercase-letters-numbers-with-dashes (always lowercase)
+            // The text has no spaces, so "oscar-garcia-4267CHAT..." - we stop at uppercase
+            const usernameMatch = rowText.match(/@([a-z0-9][a-z0-9-]*[a-z0-9])(?=[A-Z]|[^a-z0-9-]|$)/);
             if (!usernameMatch) continue;
 
-            const username = usernameMatch[1].toLowerCase();
+            const username = usernameMatch[1];
 
             // Extract name - usually the first significant text in the row
             // Look for text that looks like a name (capitalized, 2-50 chars)
@@ -301,13 +302,22 @@ try {
 
             // Approach 1: Find the specific member row, then click its MEMBERSHIP button
             try {
+                // Extract just the base username (before any uppercase letters)
+                const baseUsername = username.match(/^[a-z0-9-]+/)?.[0] || username;
+                console.log(`  Looking for username: @${baseUsername}`);
+
                 clicked = await page.evaluate((uname) => {
                     // Find the member row containing this username AND "Trial declined"
                     const allDivs = document.querySelectorAll('div');
                     for (const div of allDivs) {
                         const text = div.textContent || '';
-                        // Must contain: username, Trial declined, MEMBERSHIP
-                        if (text.includes('@' + uname) &&
+                        // Must contain: username (followed by uppercase like CHAT), Trial declined
+                        // Use regex to find @username followed by uppercase
+                        const hasUser = new RegExp('@' + uname + '[A-Z]', 'i').test(text) ||
+                                       text.includes('@' + uname + ' ') ||
+                                       text.includes('@' + uname + '\n');
+
+                        if (hasUser &&
                             text.includes('Trial declined') &&
                             text.length < 3000) {
 
@@ -324,7 +334,7 @@ try {
                         }
                     }
                     return false;
-                }, username);
+                }, baseUsername);
 
                 if (clicked) console.log('  Clicked via row-specific search');
             } catch (e) {
@@ -463,8 +473,17 @@ try {
                 }
 
                 if (!modalText) {
-                    return { error: 'Could not find modal' };
+                    // Debug: return some page info
+                    return {
+                        error: 'Could not find modal',
+                        pageHasEmail: document.body.innerText.includes('Email:'),
+                        pageHasMembershipSettings: document.body.innerText.includes('Membership settings')
+                    };
                 }
+
+                // Debug log
+                console.log('Modal text length:', modalText.length);
+                console.log('Modal text preview:', modalText.substring(0, 200));
 
                 // Extract email - format is "Email: email@domain.com"
                 // Stop at first non-email character (letter after TLD, colon, etc)
@@ -538,10 +557,16 @@ try {
                 return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy, modalFound: true };
             });
 
-            console.log(`  Name: ${memberData.name}`);
-            console.log(`  Email: ${memberData.email}`);
-            console.log(`  Days remaining: ${memberData.daysRemaining}`);
-            console.log(`  Price: ${memberData.price}`);
+            if (memberData.error) {
+                console.log(`  Modal error: ${memberData.error}`);
+                console.log(`  Page has Email: ${memberData.pageHasEmail}`);
+                console.log(`  Page has Membership settings: ${memberData.pageHasMembershipSettings}`);
+            } else {
+                console.log(`  Name: ${memberData.name}`);
+                console.log(`  Email: ${memberData.email}`);
+                console.log(`  Days remaining: ${memberData.daysRemaining}`);
+                console.log(`  Price: ${memberData.price}`);
+            }
 
             members.push({
                 name: memberData.name || 'Unknown',
