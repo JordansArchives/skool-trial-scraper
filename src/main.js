@@ -130,45 +130,53 @@ try {
 
     const trialDeclinedMembers = await page.evaluate(() => {
         const members = [];
-        const processedMembers = new Set();
+        const processedUsernames = new Set();
 
-        // Find all text that contains "Trial declined"
-        const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-            null,
-            false
-        );
+        // Debug: Log page content summary
+        const pageText = document.body.innerText;
+        const hasDeclined = pageText.toLowerCase().includes('declined');
+        console.log('Page contains "declined":', hasDeclined);
 
-        let node;
-        while (node = walker.nextNode()) {
-            if (node.textContent.includes('Trial declined')) {
-                // Found a trial declined element - find the parent container
-                let container = node.parentElement;
-                for (let i = 0; i < 15; i++) {
-                    if (!container) break;
-                    container = container.parentElement;
+        // Find all elements containing "declined" (case insensitive)
+        const allElements = document.querySelectorAll('*');
 
-                    // Look for member name
-                    const nameEl = container.querySelector('a[href*="/u/"]');
-                    if (nameEl) {
-                        const name = nameEl.textContent?.trim();
-                        if (name && !processedMembers.has(name)) {
-                            processedMembers.add(name);
+        for (const el of allElements) {
+            // Check direct text content (not children)
+            const directText = Array.from(el.childNodes)
+                .filter(n => n.nodeType === Node.TEXT_NODE)
+                .map(n => n.textContent)
+                .join('');
 
-                            // Extract days remaining
-                            const trialText = node.textContent;
-                            const parentText = node.parentElement?.textContent || '';
-                            const fullText = trialText + ' ' + parentText;
-                            const daysMatch = fullText.match(/removing in (\d+) days?/i);
+            // Also check the element's full text
+            const fullText = el.textContent || '';
+
+            if (fullText.toLowerCase().includes('declined')) {
+                // Found an element with "declined" - traverse up to find the member row
+                let container = el;
+
+                // Go up to find a container that has member info
+                for (let i = 0; i < 20; i++) {
+                    if (!container || container === document.body) break;
+
+                    // Look for member profile link
+                    const profileLinks = container.querySelectorAll('a[href*="/u/"]');
+
+                    if (profileLinks.length > 0) {
+                        const nameEl = profileLinks[0];
+                        const href = nameEl.getAttribute('href') || '';
+                        const username = href.split('/u/')[1]?.split('?')[0];
+
+                        if (username && !processedUsernames.has(username)) {
+                            processedUsernames.add(username);
+
+                            const name = nameEl.textContent?.trim();
+                            const containerText = container.textContent || '';
+
+                            // Extract days remaining from "removing in X days"
+                            const daysMatch = containerText.match(/removing in (\d+) days?/i);
                             const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
 
-                            // Get username from href
-                            const href = nameEl.getAttribute('href');
-                            const username = href ? href.split('/u/')[1] : null;
-
-                            // Try to find price tier in container
-                            const containerText = container.textContent || '';
+                            // Try to find price tier
                             const priceMatch = containerText.match(/\$(\d+)\/(month|year)/i);
                             const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
 
@@ -179,6 +187,8 @@ try {
                             // Try to find last active
                             const activeMatch = containerText.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+days?\s+ago)/i);
                             const lastActive = activeMatch ? activeMatch[1] : null;
+
+                            console.log(`Found declined member: ${name} (@${username}), removing in ${daysRemaining} days`);
 
                             members.push({
                                 name,
@@ -191,9 +201,11 @@ try {
                                 scrapedAt: new Date().toISOString()
                             });
 
-                            break;
+                            break; // Found this member, stop traversing up
                         }
                     }
+
+                    container = container.parentElement;
                 }
             }
         }
