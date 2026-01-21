@@ -179,63 +179,93 @@ try {
         // Get all text content
         const pageText = document.body.innerText;
 
-        // Find all profile links on the page
-        const profileLinks = document.querySelectorAll('a[href*="/u/"]');
-        debugLog.push(`Found ${profileLinks.length} profile links`);
+        // Try multiple link selectors
+        const linkSelectors = [
+            'a[href*="/u/"]',           // Original
+            'a[href*="members"]',        // Members links
+            'a[data-testid]',            // Test IDs
+            'a[href*="@"]',              // Username links
+        ];
 
-        // For each profile link, check if its row contains "declined"
-        for (const link of profileLinks) {
-            // Traverse up to find the member row/card container
-            let container = link;
-            for (let i = 0; i < 10; i++) {
-                if (!container.parentElement) break;
-                container = container.parentElement;
+        let allLinks = [];
+        for (const selector of linkSelectors) {
+            const links = document.querySelectorAll(selector);
+            debugLog.push(`Selector "${selector}": ${links.length} links`);
+            allLinks.push(...links);
+        }
 
-                const containerText = container.textContent || '';
+        // Also try finding all links and filtering
+        const allPageLinks = document.querySelectorAll('a');
+        debugLog.push(`Total links on page: ${allPageLinks.length}`);
 
-                // Check if this container has "declined" in it
-                if (containerText.toLowerCase().includes('declined')) {
-                    const href = link.getAttribute('href') || '';
-                    const username = href.split('/u/')[1]?.split('?')[0];
+        // Extract from text content using regex since links aren't working
+        // Look for pattern: name followed by @username
+        const usernamePattern = /@([a-z0-9-]+)/gi;
+        const usernameMatches = pageText.match(usernamePattern) || [];
+        debugLog.push(`Found ${usernameMatches.length} @username patterns`);
 
-                    if (username && !processedUsernames.has(username)) {
-                        processedUsernames.add(username);
+        // Split page into sections by looking for "Trial declined"
+        const sections = pageText.split(/(?=Trial declined)/i);
+        debugLog.push(`Found ${sections.length - 1} "Trial declined" sections`);
 
-                        const name = link.textContent?.trim();
+        for (const section of sections) {
+            if (!section.toLowerCase().includes('trial declined')) continue;
 
-                        // Extract days remaining
-                        const daysMatch = containerText.match(/removing in (\d+) days?/i);
-                        const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
+            // Extract username from this section
+            const usernameMatch = section.match(/@([a-z0-9-]+)/i);
+            if (!usernameMatch) {
+                debugLog.push('Section found but no username pattern');
+                continue;
+            }
 
-                        // Price
-                        const priceMatch = containerText.match(/\$(\d+)\/(month|year)/i);
-                        const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
+            const username = usernameMatch[1];
+            if (processedUsernames.has(username)) continue;
+            processedUsernames.add(username);
 
-                        // Join date
-                        const joinMatch = containerText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
-                        const joinDate = joinMatch ? joinMatch[1] : null;
-
-                        // Last active
-                        const activeMatch = containerText.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+days?\s+ago)/i);
-                        const lastActive = activeMatch ? activeMatch[1] : null;
-
-                        debugLog.push(`Found: ${name} (@${username})`);
-
-                        members.push({
-                            name,
-                            username,
-                            status: 'Trial declined',
-                            daysRemaining,
-                            price,
-                            joinDate,
-                            lastActive,
-                            scrapedAt: new Date().toISOString()
-                        });
-
-                        break; // Found for this link, move to next
-                    }
+            // Try to extract name - usually appears before the @username
+            // Look for capitalized words before @
+            const beforeUsername = section.split('@')[0];
+            const nameLines = beforeUsername.split('\n').filter(l => l.trim());
+            // The name is usually a line with capitalized words
+            let name = null;
+            for (let i = nameLines.length - 1; i >= 0; i--) {
+                const line = nameLines[i].trim();
+                // Skip common labels
+                if (/^(Active|Joined|CHAT|ME|\d+|Invited by)/.test(line)) continue;
+                if (line.length > 2 && line.length < 50 && /^[A-Z]/.test(line)) {
+                    name = line;
+                    break;
                 }
             }
+
+            // Extract days remaining
+            const daysMatch = section.match(/removing in (\d+) days?/i);
+            const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
+
+            // Price
+            const priceMatch = section.match(/\$(\d+)\/(month|year)/i);
+            const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
+
+            // Join date
+            const joinMatch = section.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
+            const joinDate = joinMatch ? joinMatch[1] : null;
+
+            // Last active
+            const activeMatch = section.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+(?:days?|hours?|minutes?)\s+ago)/i);
+            const lastActive = activeMatch ? activeMatch[1] : null;
+
+            debugLog.push(`Extracted: ${name} (@${username}), ${daysRemaining} days, ${price}`);
+
+            members.push({
+                name: name || 'Unknown',
+                username,
+                status: 'Trial declined',
+                daysRemaining,
+                price,
+                joinDate,
+                lastActive,
+                scrapedAt: new Date().toISOString()
+            });
         }
 
         return { members, debugLog };
