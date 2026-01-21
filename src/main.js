@@ -247,9 +247,14 @@ try {
             let name = null;
             for (let i = linesBeforeUsername.length - 1; i >= 0; i--) {
                 const line = linesBeforeUsername[i].trim();
-                // Skip common labels and short strings
-                if (/^(Active|Joined|CHAT|ME|MESSAGE|\d+|Invited by|Admin|Moderator|\$)/i.test(line)) continue;
-                if (line.length > 2 && line.length < 60 && /^[A-Z]/.test(line)) {
+                // Skip common labels, status text, and short strings
+                if (/^(Active|Joined|CHAT|ME|MESSAGE|\d+|Invited by|Admin|Moderator|\$|Trial|Removed|Member)/i.test(line)) continue;
+                // Skip lines that look like trial status
+                if (/trial\s*\(|ends in|removing in/i.test(line)) continue;
+                // Skip URLs
+                if (/^https?:\/\//i.test(line)) continue;
+                // Name should be capitalized words, reasonable length
+                if (line.length > 2 && line.length < 60 && /^[A-Z][a-z]/.test(line)) {
                     name = line;
                     break;
                 }
