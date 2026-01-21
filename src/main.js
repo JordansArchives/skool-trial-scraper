@@ -43,7 +43,7 @@ try {
     console.log('Login successful!');
 
     // Step 3: Navigate to community members page (admin view)
-    const membersUrl = `https://www.skool.com/${communityName}/members`;
+    const membersUrl = `https://www.skool.com/${communityName}/-/members`;
     console.log(`Navigating to members page: ${membersUrl}`);
     await page.goto(membersUrl, { waitUntil: 'networkidle' });
 
