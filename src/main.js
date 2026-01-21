@@ -135,14 +135,14 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(1000);
 
-    // Step 5: Find members with "Trial declined" status and click their MEMBERSHIP button
-    console.log('Scanning for trial-declined members...');
+    // Step 5: Find members with "Trial declined" or "Trial cancelled" status
+    console.log('Scanning for trial-declined/cancelled members...');
 
     // Debug: Check what's on the page - look at HTML structure
     const pageDebug = await page.evaluate(() => {
         const pageText = document.body.innerText;
         const pageHTML = document.body.innerHTML;
-        const hasDeclined = pageText.includes('Trial declined');
+        const hasDeclined = pageText.includes('Trial declined') || pageText.includes('Trial cancelled');
 
         // Look for MEMBERSHIP in different ways
         const hasMembershipText = pageText.toUpperCase().includes('MEMBERSHIP');
@@ -163,7 +163,7 @@ try {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         let node;
         while (node = walker.nextNode()) {
-            if (node.textContent.includes('Trial declined')) {
+            if (node.textContent.includes('Trial declined') || node.textContent.includes('Trial cancelled')) {
                 // Get parent structure
                 let parent = node.parentElement;
                 let structure = [];
@@ -189,7 +189,7 @@ try {
     });
 
     console.log('Page debug info:');
-    console.log(`  - Has "Trial declined" in text: ${pageDebug.hasDeclined}`);
+    console.log(`  - Has "Trial declined/cancelled" in text: ${pageDebug.hasDeclined}`);
     console.log(`  - Has "MEMBERSHIP" in text: ${pageDebug.hasMembershipText}`);
     console.log(`  - Has "MEMBERSHIP" in HTML: ${pageDebug.hasMembershipHTML}`);
     console.log(`  - Total clickable elements: ${pageDebug.totalClickables}`);
@@ -198,7 +198,7 @@ try {
         console.log(`    ${i + 1}. "${info.text}" - structure: ${info.structure}`);
     });
 
-    // Find the member rows that contain "Trial declined" and extract their info
+    // Find the member rows that contain "Trial declined" or "Trial cancelled" and extract their info
     const declinedMemberInfo = await page.evaluate(() => {
         const results = [];
 
@@ -225,8 +225,8 @@ try {
         for (const row of rows) {
             const rowText = row.textContent || '';
 
-            // Check if this row has "Trial declined"
-            if (!rowText.includes('Trial declined')) continue;
+            // Check if this row has "Trial declined" or "Trial cancelled"
+            if (!rowText.includes('Trial declined') && !rowText.includes('Trial cancelled')) continue;
 
             // Extract username from this row - stop at first uppercase letter
             // Username format: @lowercase-letters-numbers-with-dashes (always lowercase)
@@ -307,18 +307,19 @@ try {
                 console.log(`  Looking for username: @${baseUsername}`);
 
                 clicked = await page.evaluate((uname) => {
-                    // Find the member row containing this username AND "Trial declined"
+                    // Find the member row containing this username AND "Trial declined/cancelled"
                     const allDivs = document.querySelectorAll('div');
                     for (const div of allDivs) {
                         const text = div.textContent || '';
-                        // Must contain: username (followed by uppercase like CHAT), Trial declined
+                        // Must contain: username (followed by uppercase like CHAT), Trial declined/cancelled
                         // Use regex to find @username followed by uppercase
                         const hasUser = new RegExp('@' + uname + '[A-Z]', 'i').test(text) ||
                                        text.includes('@' + uname + ' ') ||
                                        text.includes('@' + uname + '\n');
+                        const hasTrialEnd = text.includes('Trial declined') || text.includes('Trial cancelled');
 
                         if (hasUser &&
-                            text.includes('Trial declined') &&
+                            hasTrialEnd &&
                             text.length < 3000) {
 
                             // Find MEMBERSHIP button within this div
@@ -542,8 +543,9 @@ try {
                 const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
 
                 // Extract trial status and days remaining
-                const trialMatch = modalText.match(/Trial declined \(removing in (\d+) days?\)/i);
-                const daysRemaining = trialMatch ? parseInt(trialMatch[1]) : null;
+                const trialMatch = modalText.match(/Trial (declined|cancelled) \(removing in (\d+) days?\)/i);
+                const trialStatus = trialMatch ? `Trial ${trialMatch[1].toLowerCase()}` : null;
+                const daysRemaining = trialMatch ? parseInt(trialMatch[2]) : null;
 
                 // Extract join date
                 const joinMatch = modalText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
@@ -557,7 +559,7 @@ try {
                 const invitedMatch = modalText.match(/Invited by\s+([A-Za-z\s]+)/i);
                 const invitedBy = invitedMatch ? invitedMatch[1].trim() : null;
 
-                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy, modalFound: true, debugInfo };
+                return { email, name, role, tier, price, daysRemaining, trialStatus, joinDate, ltv, invitedBy, modalFound: true, debugInfo };
             });
 
             if (memberData.error) {
@@ -576,13 +578,13 @@ try {
             }
 
             members.push({
-                name: memberData.name || 'Unknown',
+                name: memberData.name || previewName || 'Unknown',
                 username,
                 email: memberData.email,
                 role: memberData.role,
                 tier: memberData.tier,
-                status: 'Trial declined',
-                daysRemaining: memberData.daysRemaining,
+                status: memberData.trialStatus || 'Trial declined/cancelled',
+                daysRemaining: memberData.daysRemaining || previewDays,
                 price: memberData.price,
                 joinDate: memberData.joinDate,
                 ltv: memberData.ltv,
