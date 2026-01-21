@@ -1,0 +1,29 @@
+{
+    "title": "Skool Trial Declined Scraper",
+    "description": "Find members who declined their trial in your Skool community",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "email": {
+            "title": "Skool Email",
+            "description": "Your Skool login email (must be admin of the community)",
+            "type": "string",
+            "editor": "textfield"
+        },
+        "password": {
+            "title": "Skool Password",
+            "description": "Your Skool account password",
+            "type": "string",
+            "editor": "textfield",
+            "isSecret": true
+        },
+        "communityUrl": {
+            "title": "Community URL",
+            "description": "Full URL to your Skool community (e.g., https://www.skool.com/asterisk-create)",
+            "type": "string",
+            "editor": "textfield",
+            "prefill": "https://www.skool.com/asterisk-create"
+        }
+    },
+    "required": ["email", "password", "communityUrl"]
+}

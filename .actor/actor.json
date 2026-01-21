@@ -1,0 +1,9 @@
+{
+    "actorSpecification": 1,
+    "name": "skool-trial-declined-scraper",
+    "title": "Skool Trial Declined Scraper",
+    "description": "Scrapes Skool admin member view to find members who declined their trial, so you can reach out before they're removed.",
+    "version": "1.0.0",
+    "input": "./input_schema.json",
+    "dockerfile": "../Dockerfile"
+}
