@@ -107,18 +107,28 @@ try {
     console.log('Scrolling to load all members...');
     let previousHeight = 0;
     let scrollAttempts = 0;
-    const maxScrollAttempts = 10;
+    const maxScrollAttempts = 20; // Increased from 10
+    let sameHeightCount = 0;
 
     while (scrollAttempts < maxScrollAttempts) {
         const currentHeight = await page.evaluate(() => document.body.scrollHeight);
         if (currentHeight === previousHeight) {
-            break; // No more content to load
+            sameHeightCount++;
+            if (sameHeightCount >= 3) {
+                console.log('  No new content after 3 attempts, stopping scroll');
+                break; // No more content to load after 3 tries
+            }
+        } else {
+            sameHeightCount = 0;
         }
         previousHeight = currentHeight;
         await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(2500); // Slightly longer wait
         scrollAttempts++;
-        console.log(`  Scroll ${scrollAttempts}/${maxScrollAttempts}...`);
+
+        // Count members loaded so far
+        const memberCount = await page.evaluate(() => document.querySelectorAll('a[href*="/u/"]').length);
+        console.log(`  Scroll ${scrollAttempts}/${maxScrollAttempts}... (${memberCount} profile links loaded)`);
     }
 
     // Scroll back to top
@@ -128,97 +138,121 @@ try {
     // Step 5: Scrape members with "Trial declined" status
     console.log('Scanning for trial-declined members...');
 
+    // First, let's get debug info about what's on the page
+    const debugInfo = await page.evaluate(() => {
+        const pageText = document.body.innerText;
+        const hasDeclined = pageText.toLowerCase().includes('declined');
+        const declinedMatches = pageText.match(/declined/gi) || [];
+
+        // Find a snippet around "declined" text
+        const declinedIndex = pageText.toLowerCase().indexOf('declined');
+        const snippet = declinedIndex >= 0
+            ? pageText.substring(Math.max(0, declinedIndex - 100), declinedIndex + 100)
+            : 'not found';
+
+        // Count profile links
+        const profileLinks = document.querySelectorAll('a[href*="/u/"]');
+
+        return {
+            hasDeclined,
+            declinedCount: declinedMatches.length,
+            snippet,
+            profileLinksCount: profileLinks.length,
+            pageTextLength: pageText.length
+        };
+    });
+
+    console.log('Debug info:');
+    console.log(`  - Page contains "declined": ${debugInfo.hasDeclined}`);
+    console.log(`  - Number of "declined" matches: ${debugInfo.declinedCount}`);
+    console.log(`  - Profile links found: ${debugInfo.profileLinksCount}`);
+    console.log(`  - Page text length: ${debugInfo.pageTextLength}`);
+    if (debugInfo.hasDeclined) {
+        console.log(`  - Text snippet around "declined": ${debugInfo.snippet}`);
+    }
+
     const trialDeclinedMembers = await page.evaluate(() => {
         const members = [];
         const processedUsernames = new Set();
+        const debugLog = [];
 
-        // Debug: Log page content summary
+        // Get all text content
         const pageText = document.body.innerText;
-        const hasDeclined = pageText.toLowerCase().includes('declined');
-        console.log('Page contains "declined":', hasDeclined);
 
-        // Find all elements containing "declined" (case insensitive)
-        const allElements = document.querySelectorAll('*');
+        // Find all profile links on the page
+        const profileLinks = document.querySelectorAll('a[href*="/u/"]');
+        debugLog.push(`Found ${profileLinks.length} profile links`);
 
-        for (const el of allElements) {
-            // Check direct text content (not children)
-            const directText = Array.from(el.childNodes)
-                .filter(n => n.nodeType === Node.TEXT_NODE)
-                .map(n => n.textContent)
-                .join('');
+        // For each profile link, check if its row contains "declined"
+        for (const link of profileLinks) {
+            // Traverse up to find the member row/card container
+            let container = link;
+            for (let i = 0; i < 10; i++) {
+                if (!container.parentElement) break;
+                container = container.parentElement;
 
-            // Also check the element's full text
-            const fullText = el.textContent || '';
+                const containerText = container.textContent || '';
 
-            if (fullText.toLowerCase().includes('declined')) {
-                // Found an element with "declined" - traverse up to find the member row
-                let container = el;
+                // Check if this container has "declined" in it
+                if (containerText.toLowerCase().includes('declined')) {
+                    const href = link.getAttribute('href') || '';
+                    const username = href.split('/u/')[1]?.split('?')[0];
 
-                // Go up to find a container that has member info
-                for (let i = 0; i < 20; i++) {
-                    if (!container || container === document.body) break;
+                    if (username && !processedUsernames.has(username)) {
+                        processedUsernames.add(username);
 
-                    // Look for member profile link
-                    const profileLinks = container.querySelectorAll('a[href*="/u/"]');
+                        const name = link.textContent?.trim();
 
-                    if (profileLinks.length > 0) {
-                        const nameEl = profileLinks[0];
-                        const href = nameEl.getAttribute('href') || '';
-                        const username = href.split('/u/')[1]?.split('?')[0];
+                        // Extract days remaining
+                        const daysMatch = containerText.match(/removing in (\d+) days?/i);
+                        const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
 
-                        if (username && !processedUsernames.has(username)) {
-                            processedUsernames.add(username);
+                        // Price
+                        const priceMatch = containerText.match(/\$(\d+)\/(month|year)/i);
+                        const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
 
-                            const name = nameEl.textContent?.trim();
-                            const containerText = container.textContent || '';
+                        // Join date
+                        const joinMatch = containerText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
+                        const joinDate = joinMatch ? joinMatch[1] : null;
 
-                            // Extract days remaining from "removing in X days"
-                            const daysMatch = containerText.match(/removing in (\d+) days?/i);
-                            const daysRemaining = daysMatch ? parseInt(daysMatch[1]) : null;
+                        // Last active
+                        const activeMatch = containerText.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+days?\s+ago)/i);
+                        const lastActive = activeMatch ? activeMatch[1] : null;
 
-                            // Try to find price tier
-                            const priceMatch = containerText.match(/\$(\d+)\/(month|year)/i);
-                            const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
+                        debugLog.push(`Found: ${name} (@${username})`);
 
-                            // Try to find join date
-                            const joinMatch = containerText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
-                            const joinDate = joinMatch ? joinMatch[1] : null;
+                        members.push({
+                            name,
+                            username,
+                            status: 'Trial declined',
+                            daysRemaining,
+                            price,
+                            joinDate,
+                            lastActive,
+                            scrapedAt: new Date().toISOString()
+                        });
 
-                            // Try to find last active
-                            const activeMatch = containerText.match(/Active\s+(\d+[hmd]\s*ago|\d+\s+days?\s+ago)/i);
-                            const lastActive = activeMatch ? activeMatch[1] : null;
-
-                            console.log(`Found declined member: ${name} (@${username}), removing in ${daysRemaining} days`);
-
-                            members.push({
-                                name,
-                                username,
-                                status: 'Trial declined',
-                                daysRemaining,
-                                price,
-                                joinDate,
-                                lastActive,
-                                scrapedAt: new Date().toISOString()
-                            });
-
-                            break; // Found this member, stop traversing up
-                        }
+                        break; // Found for this link, move to next
                     }
-
-                    container = container.parentElement;
                 }
             }
         }
 
-        return members;
+        return { members, debugLog };
     });
 
-    console.log(`Found ${trialDeclinedMembers.length} members who declined their trial`);
+    // Log the debug info from the browser
+    console.log('Browser debug log:');
+    trialDeclinedMembers.debugLog.forEach(log => console.log(`  - ${log}`));
 
-    if (trialDeclinedMembers.length > 0) {
+    const members = trialDeclinedMembers.members;
+
+    console.log(`Found ${members.length} members who declined their trial`);
+
+    if (members.length > 0) {
         console.log('\nTrial-declined members:');
         console.log('------------------------');
-        trialDeclinedMembers.forEach(m => {
+        members.forEach(m => {
             console.log(`  ${m.name}`);
             console.log(`    Username: @${m.username || 'unknown'}`);
             console.log(`    Days remaining: ${m.daysRemaining || 'unknown'}`);
@@ -235,16 +269,16 @@ try {
     }
 
     // Save results to dataset
-    if (trialDeclinedMembers.length > 0) {
-        await Actor.pushData(trialDeclinedMembers);
+    if (members.length > 0) {
+        await Actor.pushData(members);
     }
 
     // Also save a summary to key-value store
     await Actor.setValue('summary', {
         community: communityName,
         scrapedAt: new Date().toISOString(),
-        totalFound: trialDeclinedMembers.length,
-        members: trialDeclinedMembers
+        totalFound: members.length,
+        members: members
     });
 
     console.log('\nResults saved!');
