@@ -272,56 +272,50 @@ try {
                 }
             } catch (e) { /* continue to next approach */ }
 
-            // Approach 2: Find by looking for the second button (after CHAT) in member row
+            // Approach 2: Find button with ButtonWrapper class containing MEMBERSHIP
             if (!clicked) {
                 try {
                     clicked = await page.evaluate((uname) => {
-                        const els = [...document.querySelectorAll('*')];
-                        for (const el of els) {
-                            const text = el.textContent || '';
-                            // Find the member row (contains username and Trial declined)
-                            if (text.includes('@' + uname) && text.includes('Trial declined') && text.length < 2000) {
-                                // Find all button-like elements
-                                const buttons = el.querySelectorAll('button, [role="button"], a[class*="btn"], div[class*="btn"]');
-                                // Look for one that has MEMBERSHIP or is the second one (after CHAT)
-                                let chatFound = false;
-                                for (const btn of buttons) {
-                                    const btnText = btn.textContent.toUpperCase();
-                                    if (btnText.includes('MEMBERSHIP')) {
-                                        btn.click();
-                                        return true;
-                                    }
-                                    if (btnText.includes('CHAT')) {
-                                        chatFound = true;
-                                    } else if (chatFound && btn.offsetWidth > 0) {
-                                        // This might be MEMBERSHIP (it's after CHAT)
-                                        btn.click();
-                                        return true;
-                                    }
-                                }
+                        // First find all buttons with ButtonWrapper class (Skool's button style)
+                        const allButtons = document.querySelectorAll('button[class*="ButtonWrapper"], button[class*="buttonWrapper"]');
+                        console.log('Found ' + allButtons.length + ' ButtonWrapper buttons');
 
-                                // Approach 3: Look for gear/settings icon (SVG)
-                                const svgs = el.querySelectorAll('svg');
-                                for (const svg of svgs) {
-                                    const parent = svg.parentElement;
-                                    if (parent && parent.offsetWidth > 0) {
-                                        // Check if it's near a MEMBERSHIP-like element
-                                        const nearText = parent.textContent || parent.parentElement?.textContent || '';
-                                        if (nearText.toUpperCase().includes('MEMBERSHIP') ||
-                                            nearText.toUpperCase().includes('SETTING')) {
-                                            parent.click();
-                                            return true;
-                                        }
+                        for (const btn of allButtons) {
+                            const btnText = btn.textContent.toUpperCase();
+                            if (btnText.includes('MEMBERSHIP')) {
+                                // Check if this button is in a row with our username
+                                let parent = btn.parentElement;
+                                for (let i = 0; i < 15 && parent; i++) {
+                                    if (parent.textContent.includes('@' + uname)) {
+                                        btn.click();
+                                        return true;
                                     }
+                                    parent = parent.parentElement;
                                 }
                             }
                         }
+
+                        // Fallback: Find any button with MEMBERSHIP text near our user
+                        const allBtns = document.querySelectorAll('button');
+                        for (const btn of allBtns) {
+                            if (btn.textContent.toUpperCase().includes('MEMBERSHIP')) {
+                                let parent = btn.parentElement;
+                                for (let i = 0; i < 15 && parent; i++) {
+                                    if (parent.textContent.includes('@' + uname)) {
+                                        btn.click();
+                                        return true;
+                                    }
+                                    parent = parent.parentElement;
+                                }
+                            }
+                        }
+
                         return false;
                     }, username);
 
-                    if (clicked) console.log('  Clicked via DOM search');
+                    if (clicked) console.log('  Clicked via ButtonWrapper/button search');
                 } catch (e) {
-                    console.log(`  DOM search error: ${e.message}`);
+                    console.log(`  Button search error: ${e.message}`);
                 }
             }
 
