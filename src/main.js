@@ -32,15 +32,49 @@ try {
 
     // Step 2: Login
     console.log('Logging in...');
-    await page.waitForSelector('input[type="email"], input[name="email"]', { timeout: 10000 });
-    await page.fill('input[type="email"], input[name="email"]', email);
-    await page.fill('input[type="password"], input[name="password"]', password);
 
-    // Click login button
-    await page.click('button[type="submit"]');
-    await page.waitForLoadState('networkidle', { timeout: 30000 });
+    // Take screenshot of login page
+    const loginScreenshot = await page.screenshot();
+    await Actor.setValue('debug-login-page', loginScreenshot, { contentType: 'image/png' });
 
-    console.log('Login successful!');
+    // Find and fill email field
+    const emailField = await page.waitForSelector('input[type="email"]', { timeout: 10000 });
+    await emailField.fill(email);
+    console.log('Email entered');
+
+    // Find and fill password field
+    const passwordField = await page.waitForSelector('input[type="password"]', { timeout: 10000 });
+    await passwordField.fill(password);
+    console.log('Password entered');
+
+    // Take screenshot before clicking login
+    const preLoginScreenshot = await page.screenshot();
+    await Actor.setValue('debug-pre-login', preLoginScreenshot, { contentType: 'image/png' });
+
+    // Click login button and wait for navigation
+    await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60000 }),
+        page.click('button[type="submit"]')
+    ]);
+
+    // Wait a moment for any redirects
+    await page.waitForTimeout(3000);
+
+    // Take screenshot after login
+    const postLoginScreenshot = await page.screenshot();
+    await Actor.setValue('debug-post-login', postLoginScreenshot, { contentType: 'image/png' });
+
+    // Check if we're actually logged in by looking at the URL or page content
+    const currentUrl = page.url();
+    console.log(`Current URL after login: ${currentUrl}`);
+
+    // Check for any error messages on page
+    const pageContent = await page.content();
+    if (pageContent.includes('Invalid') || pageContent.includes('incorrect') || pageContent.includes('error')) {
+        console.log('WARNING: Login may have failed - error text detected on page');
+    }
+
+    console.log('Login completed - check debug screenshots to verify');
 
     // Step 3: Navigate to community members page (admin view)
     const membersUrl = `https://www.skool.com/${communityName}/-/members`;
