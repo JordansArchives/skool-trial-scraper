@@ -481,13 +481,16 @@ try {
                     };
                 }
 
-                // Debug log
-                console.log('Modal text length:', modalText.length);
-                console.log('Modal text preview:', modalText.substring(0, 200));
+                // Debug log - this runs in browser, need to return it
+                const debugInfo = {
+                    modalTextLength: modalText.length,
+                    modalTextPreview: modalText.substring(0, 300),
+                    firstLines: modalText.split('\n').slice(0, 5)
+                };
 
                 // Extract email - format is "Email: email@domain.com"
-                // Stop at first non-email character (letter after TLD, colon, etc)
-                const emailMatch = modalText.match(/Email:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+                // Modal has no spaces, so "email@domain.comRole:" - need to stop at Role
+                const emailMatch = modalText.match(/Email:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:com|org|net|edu|gov|io|co|club|me|info|biz|[a-z]{2}))(?=Role|Tier|$)/i);
                 const email = emailMatch ? emailMatch[1] : null;
 
                 // Extract name - it's at the top of the modal, before "Membership settings"
@@ -554,7 +557,7 @@ try {
                 const invitedMatch = modalText.match(/Invited by\s+([A-Za-z\s]+)/i);
                 const invitedBy = invitedMatch ? invitedMatch[1].trim() : null;
 
-                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy, modalFound: true };
+                return { email, name, role, tier, price, daysRemaining, joinDate, ltv, invitedBy, modalFound: true, debugInfo };
             });
 
             if (memberData.error) {
@@ -566,6 +569,10 @@ try {
                 console.log(`  Email: ${memberData.email}`);
                 console.log(`  Days remaining: ${memberData.daysRemaining}`);
                 console.log(`  Price: ${memberData.price}`);
+                if (memberData.debugInfo) {
+                    console.log(`  Modal preview: ${memberData.debugInfo.modalTextPreview?.substring(0, 100)}...`);
+                    console.log(`  First lines: ${JSON.stringify(memberData.debugInfo.firstLines)}`);
+                }
             }
 
             members.push({
