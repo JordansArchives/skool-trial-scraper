@@ -494,39 +494,29 @@ try {
                 const emailMatch = modalText.match(/Email:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:com|org|net|edu|gov|io|co|club|me|info|biz|[a-z]{2}))(?=Role|Tier|$)/i);
                 const email = emailMatch ? emailMatch[1] : null;
 
-                // Extract name - it's at the top of the modal, before "Membership settings"
-                // The modal structure is: Name\nMembership settings\n...
-                const lines = modalText.split('\n').map(l => l.trim()).filter(l => l);
+                // Extract name - it's at the beginning, before "Membership settings"
+                // Modal text is concatenated like: "Naila TayebMembership settings..."
+                // So we need to extract everything before "Membership settings"
                 let name = null;
 
-                // Look for the pattern: Name followed by "Membership settings"
-                for (let i = 0; i < lines.length - 1; i++) {
-                    if (lines[i + 1] === 'Membership settings' || lines[i + 1].includes('Membership settings')) {
-                        const candidate = lines[i];
-                        // Validate it looks like a name (not a label or button text)
-                        if (candidate.length > 2 &&
-                            candidate.length < 60 &&
-                            !candidate.includes(':') &&
-                            !candidate.includes('CHAT') &&
-                            !candidate.includes('MEMBERSHIP') &&
-                            /^[A-ZÀ-ÿ]/.test(candidate)) {
-                            name = candidate;
-                            break;
-                        }
+                // Primary approach: Extract text before "Membership settings"
+                const membershipIndex = modalText.indexOf('Membership settings');
+                if (membershipIndex > 0) {
+                    const beforeMembership = modalText.substring(0, membershipIndex).trim();
+                    // This should be the name - validate it
+                    if (beforeMembership.length > 2 &&
+                        beforeMembership.length < 60 &&
+                        /^[A-ZÀ-ÿ]/.test(beforeMembership)) {
+                        name = beforeMembership;
                     }
                 }
 
-                // Fallback: look for a name pattern (First Last) near the top
+                // Fallback: look for a name pattern at the very start
                 if (!name) {
-                    for (let i = 0; i < Math.min(10, lines.length); i++) {
-                        const line = lines[i];
-                        // Match "First Last" or "First Middle Last" pattern
-                        if (/^[A-ZÀ-ÿ][a-zà-ÿ]+\s+[A-ZÀ-ÿ][a-zà-ÿ]+/.test(line) &&
-                            !line.includes(':') &&
-                            line.length < 50) {
-                            name = line;
-                            break;
-                        }
+                    // Match "First Last" pattern at start of text
+                    const nameMatch = modalText.match(/^([A-ZÀ-ÿ][a-zà-ÿ]+\s+[A-ZÀ-ÿ][a-zà-ÿ]+)/);
+                    if (nameMatch) {
+                        name = nameMatch[1];
                     }
                 }
 
