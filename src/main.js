@@ -28,7 +28,8 @@ const page = await context.newPage();
 try {
     // Step 1: Go to Skool login page
     console.log('Navigating to Skool login...');
-    await page.goto('https://www.skool.com/login', { waitUntil: 'networkidle' });
+    await page.goto('https://www.skool.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2000);
 
     // Step 2: Login
     console.log('Logging in...');
@@ -51,14 +52,15 @@ try {
     const preLoginScreenshot = await page.screenshot();
     await Actor.setValue('debug-pre-login', preLoginScreenshot, { contentType: 'image/png' });
 
-    // Click login button and wait for navigation
-    await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60000 }),
-        page.click('button[type="submit"]')
-    ]);
+    // Click login button
+    await page.click('button[type="submit"]');
 
-    // Wait a moment for any redirects
-    await page.waitForTimeout(3000);
+    // Wait for URL to change (indicating successful login redirect)
+    await page.waitForURL(/skool\.com(?!\/login)/, { timeout: 30000 });
+    console.log('Login redirect detected');
+
+    // Wait for page to stabilize
+    await page.waitForTimeout(5000);
 
     // Take screenshot after login
     const postLoginScreenshot = await page.screenshot();
@@ -79,7 +81,8 @@ try {
     // Step 3: Navigate to community members page (admin view)
     const membersUrl = `https://www.skool.com/${communityName}/-/members`;
     console.log(`Navigating to members page: ${membersUrl}`);
-    await page.goto(membersUrl, { waitUntil: 'networkidle' });
+    await page.goto(membersUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000); // Let page fully render
 
     // Wait for page to load
     await page.waitForTimeout(3000);
