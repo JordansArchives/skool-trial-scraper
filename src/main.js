@@ -228,11 +228,12 @@ try {
             // Check if this row has "Trial declined"
             if (!rowText.includes('Trial declined')) continue;
 
-            // Extract username from this row
-            const usernameMatch = rowText.match(/@([a-z0-9-]+)/i);
+            // Extract username from this row - stop at first non-username char
+            // Username format: @lowercase-letters-numbers-with-dashes
+            const usernameMatch = rowText.match(/@([a-z0-9-]+)(?=[^a-z0-9-]|$)/i);
             if (!usernameMatch) continue;
 
-            const username = usernameMatch[1];
+            const username = usernameMatch[1].toLowerCase();
 
             // Extract name - usually the first significant text in the row
             // Look for text that looks like a name (capitalized, 2-50 chars)
@@ -254,7 +255,15 @@ try {
             results.push({ username, name, daysRemaining, rowIndex: rows.indexOf(row) });
         }
 
-        return results;
+        // Deduplicate by username
+        const seen = new Set();
+        const unique = results.filter(r => {
+            if (seen.has(r.username)) return false;
+            seen.add(r.username);
+            return true;
+        });
+
+        return unique;
     });
 
     console.log(`\nFound ${declinedMemberInfo.length} declined members:`);
@@ -458,24 +467,40 @@ try {
                 }
 
                 // Extract email - format is "Email: email@domain.com"
-                const emailMatch = modalText.match(/Email:\s*([^\s\n]+@[^\s\n]+)/i);
+                // Stop at first non-email character (letter after TLD, colon, etc)
+                const emailMatch = modalText.match(/Email:\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
                 const email = emailMatch ? emailMatch[1] : null;
 
                 // Extract name - it's at the top of the modal, before "Membership settings"
-                // Split by newlines and find the name
+                // The modal structure is: Name\nMembership settings\n...
                 const lines = modalText.split('\n').map(l => l.trim()).filter(l => l);
                 let name = null;
-                for (let i = 0; i < lines.length; i++) {
-                    if (lines[i].includes('Membership settings') && i > 0) {
-                        // Name is the line before "Membership settings"
-                        name = lines[i - 1];
-                        break;
+
+                // Look for the pattern: Name followed by "Membership settings"
+                for (let i = 0; i < lines.length - 1; i++) {
+                    if (lines[i + 1] === 'Membership settings' || lines[i + 1].includes('Membership settings')) {
+                        const candidate = lines[i];
+                        // Validate it looks like a name (not a label or button text)
+                        if (candidate.length > 2 &&
+                            candidate.length < 60 &&
+                            !candidate.includes(':') &&
+                            !candidate.includes('CHAT') &&
+                            !candidate.includes('MEMBERSHIP') &&
+                            /^[A-ZÀ-ÿ]/.test(candidate)) {
+                            name = candidate;
+                            break;
+                        }
                     }
                 }
-                // Fallback: first capitalized line that's not a label
+
+                // Fallback: look for a name pattern (First Last) near the top
                 if (!name) {
-                    for (const line of lines) {
-                        if (/^[A-Z][a-z]+ [A-Z][a-z]+/.test(line) && !line.includes(':')) {
+                    for (let i = 0; i < Math.min(10, lines.length); i++) {
+                        const line = lines[i];
+                        // Match "First Last" or "First Middle Last" pattern
+                        if (/^[A-ZÀ-ÿ][a-zà-ÿ]+\s+[A-ZÀ-ÿ][a-zà-ÿ]+/.test(line) &&
+                            !line.includes(':') &&
+                            line.length < 50) {
                             name = line;
                             break;
                         }
