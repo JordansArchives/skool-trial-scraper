@@ -135,14 +135,20 @@ try {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(1000);
 
-    // Step 5: Find members with "Trial declined" or "Trial cancelled" status
-    console.log('Scanning for trial-declined/cancelled members...');
+    // Step 5: Find members who are leaving (trial or paid)
+    // Trial: "Trial declined/cancelled (removing in X days)"
+    // Paid: "Cancelled/Declined (churns in X days)"
+    console.log('Scanning for churning members (trial + paid)...');
 
     // Debug: Check what's on the page - look at HTML structure
     const pageDebug = await page.evaluate(() => {
         const pageText = document.body.innerText;
         const pageHTML = document.body.innerHTML;
-        const hasDeclined = pageText.includes('Trial declined') || pageText.includes('Trial cancelled');
+        // Check for trial churn: "Trial declined/cancelled (removing in X days)"
+        // Check for paid churn: "Cancelled/Declined (churns in X days)"
+        const hasTrialChurn = pageText.includes('Trial declined') || pageText.includes('Trial cancelled');
+        const hasPaidChurn = /(?<!Trial )(Cancelled|Declined) \(churns in/i.test(pageText);
+        const hasDeclined = hasTrialChurn || hasPaidChurn;
 
         // Look for MEMBERSHIP in different ways
         const hasMembershipText = pageText.toUpperCase().includes('MEMBERSHIP');
@@ -163,7 +169,11 @@ try {
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
         let node;
         while (node = walker.nextNode()) {
-            if (node.textContent.includes('Trial declined') || node.textContent.includes('Trial cancelled')) {
+            // Match trial churn or paid churn
+            const text = node.textContent;
+            const isTrialChurn = text.includes('Trial declined') || text.includes('Trial cancelled');
+            const isPaidChurn = /(?<!Trial )(Cancelled|Declined) \(churns in/i.test(text);
+            if (isTrialChurn || isPaidChurn) {
                 // Get parent structure
                 let parent = node.parentElement;
                 let structure = [];
@@ -198,7 +208,7 @@ try {
         console.log(`    ${i + 1}. "${info.text}" - structure: ${info.structure}`);
     });
 
-    // Find the member rows that contain "Trial declined" or "Trial cancelled" and extract their info
+    // Find the member rows that are churning (trial or paid) and extract their info
     const declinedMemberInfo = await page.evaluate(() => {
         const results = [];
 
@@ -225,8 +235,10 @@ try {
         for (const row of rows) {
             const rowText = row.textContent || '';
 
-            // Check if this row has "Trial declined" or "Trial cancelled"
-            if (!rowText.includes('Trial declined') && !rowText.includes('Trial cancelled')) continue;
+            // Check if this row has churn status (trial or paid)
+            const hasTrialChurn = rowText.includes('Trial declined') || rowText.includes('Trial cancelled');
+            const hasPaidChurn = /(?<!Trial )(Cancelled|Declined) \(churns in/i.test(rowText);
+            if (!hasTrialChurn && !hasPaidChurn) continue;
 
             // Extract username from this row - stop at first uppercase letter
             // Username format: @lowercase-letters-numbers-with-dashes (always lowercase)
@@ -307,19 +319,22 @@ try {
                 console.log(`  Looking for username: @${baseUsername}`);
 
                 clicked = await page.evaluate((uname) => {
-                    // Find the member row containing this username AND "Trial declined/cancelled"
+                    // Find the member row containing this username AND churn status
                     const allDivs = document.querySelectorAll('div');
                     for (const div of allDivs) {
                         const text = div.textContent || '';
-                        // Must contain: username (followed by uppercase like CHAT), Trial declined/cancelled
+                        // Must contain: username (followed by uppercase like CHAT), and churn status
                         // Use regex to find @username followed by uppercase
                         const hasUser = new RegExp('@' + uname + '[A-Z]', 'i').test(text) ||
                                        text.includes('@' + uname + ' ') ||
                                        text.includes('@' + uname + '\n');
-                        const hasTrialEnd = text.includes('Trial declined') || text.includes('Trial cancelled');
+                        // Check for trial churn or paid churn
+                        const hasTrialChurn = text.includes('Trial declined') || text.includes('Trial cancelled');
+                        const hasPaidChurn = /(Cancelled|Declined) \(churns in/i.test(text) && !text.includes('Trial');
+                        const hasChurn = hasTrialChurn || hasPaidChurn;
 
                         if (hasUser &&
-                            hasTrialEnd &&
+                            hasChurn &&
                             text.length < 3000) {
 
                             // Find MEMBERSHIP button within this div
@@ -532,10 +547,25 @@ try {
                 const priceMatch = modalText.match(/\$(\d+)\/(month|year)/i);
                 const price = priceMatch ? `$${priceMatch[1]}/${priceMatch[2]}` : null;
 
-                // Extract trial status and days remaining
+                // Extract churn status and days remaining
+                // Trial: "Trial declined/cancelled (removing in X days)"
+                // Paid: "Cancelled/Declined (churns in X days)"
+                let churnStatus = null;
+                let daysRemaining = null;
+
                 const trialMatch = modalText.match(/Trial (declined|cancelled) \(removing in (\d+) days?\)/i);
-                const trialStatus = trialMatch ? `Trial ${trialMatch[1].toLowerCase()}` : null;
-                const daysRemaining = trialMatch ? parseInt(trialMatch[2]) : null;
+                if (trialMatch) {
+                    churnStatus = `Trial ${trialMatch[1].toLowerCase()}`;
+                    daysRemaining = parseInt(trialMatch[2]);
+                }
+
+                if (!churnStatus) {
+                    const paidMatch = modalText.match(/(Cancelled|Declined) \(churns in (\d+) days?\)/i);
+                    if (paidMatch && !modalText.includes('Trial ' + paidMatch[1])) {
+                        churnStatus = `Paid ${paidMatch[1].toLowerCase()}`;
+                        daysRemaining = parseInt(paidMatch[2]);
+                    }
+                }
 
                 // Extract join date
                 const joinMatch = modalText.match(/Joined\s+([A-Za-z]+\s+\d+,?\s*\d*)/i);
@@ -549,7 +579,7 @@ try {
                 const invitedMatch = modalText.match(/Invited by\s+([A-Za-z\s]+)/i);
                 const invitedBy = invitedMatch ? invitedMatch[1].trim() : null;
 
-                return { email, name, role, tier, price, daysRemaining, trialStatus, joinDate, ltv, invitedBy, modalFound: true, debugInfo };
+                return { email, name, role, tier, price, daysRemaining, churnStatus, joinDate, ltv, invitedBy, modalFound: true, debugInfo };
             });
 
             if (memberData.error) {
@@ -573,7 +603,7 @@ try {
                 email: memberData.email,
                 role: memberData.role,
                 tier: memberData.tier,
-                status: memberData.trialStatus || 'Trial declined/cancelled',
+                status: memberData.churnStatus || 'Churning',
                 daysRemaining: memberData.daysRemaining || previewDays,
                 price: memberData.price,
                 joinDate: memberData.joinDate,
