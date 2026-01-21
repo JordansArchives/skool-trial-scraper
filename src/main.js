@@ -138,77 +138,146 @@ try {
     // Step 5: Find members with "Trial declined" status and click their MEMBERSHIP button
     console.log('Scanning for trial-declined members...');
 
-    // Find all MEMBERSHIP buttons that are near "Trial declined" text
-    // Strategy: Find rows containing "Trial declined", then find MEMBERSHIP button in that row
-    const declinedMemberButtons = await page.evaluate(() => {
-        const buttons = [];
+    // Debug: Check what's on the page
+    const pageDebug = await page.evaluate(() => {
+        const pageText = document.body.innerText;
+        const hasDeclined = pageText.includes('Trial declined');
+        const hasMembership = pageText.includes('MEMBERSHIP');
 
-        // Find all elements containing "Trial declined"
+        // Find all buttons
+        const allButtons = document.querySelectorAll('button, [role="button"]');
+        const buttonTexts = [...allButtons].slice(0, 20).map(b => b.textContent.trim().substring(0, 50));
+
+        // Find clickable elements with MEMBERSHIP
+        const membershipElements = [...document.querySelectorAll('*')].filter(
+            el => el.textContent.includes('MEMBERSHIP') && el.textContent.length < 100
+        );
+
+        return {
+            hasDeclined,
+            hasMembership,
+            totalButtons: allButtons.length,
+            buttonSamples: buttonTexts,
+            membershipElementsCount: membershipElements.length
+        };
+    });
+
+    console.log('Page debug info:');
+    console.log(`  - Has "Trial declined": ${pageDebug.hasDeclined}`);
+    console.log(`  - Has "MEMBERSHIP": ${pageDebug.hasMembership}`);
+    console.log(`  - Total buttons: ${pageDebug.totalButtons}`);
+    console.log(`  - MEMBERSHIP elements: ${pageDebug.membershipElementsCount}`);
+    console.log(`  - Button samples: ${pageDebug.buttonSamples.join(' | ')}`);
+
+    // New approach: Find all clickable MEMBERSHIP elements, then check if their row has "Trial declined"
+    const declinedMemberButtons = await page.evaluate(() => {
+        const results = [];
+        const debugLog = [];
+
+        // Find all elements that contain "MEMBERSHIP" text (the buttons)
         const allElements = [...document.querySelectorAll('*')];
-        const declinedElements = allElements.filter(el => {
+        const membershipElements = allElements.filter(el => {
             const text = el.textContent || '';
-            return text.includes('Trial declined') && !el.querySelector('[class*="Trial declined"]');
+            // Only match elements where MEMBERSHIP is a direct/near-direct child text
+            return text.includes('MEMBERSHIP') && text.length < 200;
         });
 
-        // For each declined element, find the nearest MEMBERSHIP button
-        for (const el of declinedElements) {
-            // Look for specific text node to avoid duplicates
-            const hasDirectText = [...el.childNodes].some(
-                n => n.nodeType === Node.TEXT_NODE && n.textContent.includes('Trial declined')
-            );
-            if (!hasDirectText) continue;
+        debugLog.push(`Found ${membershipElements.length} elements with MEMBERSHIP text`);
 
-            // Traverse up to find the member row container
+        // For each MEMBERSHIP element, check if its parent container has "Trial declined"
+        const processed = new Set();
+        for (const el of membershipElements) {
+            // Traverse up to find the member row
             let container = el;
             for (let i = 0; i < 15; i++) {
                 if (!container.parentElement) break;
                 container = container.parentElement;
 
-                // Look for MEMBERSHIP button in this container
-                const membershipBtns = container.querySelectorAll('button, [role="button"]');
-                for (const btn of membershipBtns) {
-                    if (btn.textContent.includes('MEMBERSHIP')) {
-                        // Found it! Get some identifying info
-                        const containerText = container.textContent;
-                        const usernameMatch = containerText.match(/@([a-z0-9-]+)/i);
-                        buttons.push({
-                            username: usernameMatch ? usernameMatch[1] : null,
-                            buttonIndex: [...document.querySelectorAll('button, [role="button"]')].indexOf(btn)
+                const containerText = container.textContent || '';
+
+                // Check if this container has both MEMBERSHIP and Trial declined
+                if (containerText.includes('Trial declined') && containerText.includes('@')) {
+                    const usernameMatch = containerText.match(/@([a-z0-9-]+)/i);
+                    const username = usernameMatch ? usernameMatch[1] : null;
+
+                    if (username && !processed.has(username)) {
+                        processed.add(username);
+
+                        // Find the actual clickable element (the one with just MEMBERSHIP text)
+                        // Look for the most specific element containing MEMBERSHIP
+                        let clickTarget = el;
+                        const children = el.querySelectorAll('*');
+                        for (const child of children) {
+                            if (child.textContent.trim() === 'MEMBERSHIP' ||
+                                child.textContent.includes('MEMBERSHIP') && child.textContent.length < 50) {
+                                clickTarget = child;
+                            }
+                        }
+
+                        debugLog.push(`Found declined member: @${username}`);
+
+                        results.push({
+                            username,
+                            // Store selector info for clicking
+                            elementHTML: clickTarget.outerHTML.substring(0, 100)
                         });
                         break;
                     }
                 }
-                if (buttons.length > 0 && buttons[buttons.length - 1].username) break;
             }
         }
 
-        // Dedupe by username
-        const seen = new Set();
-        return buttons.filter(b => {
-            if (!b.username || seen.has(b.username)) return false;
-            seen.add(b.username);
-            return true;
-        });
+        return { results, debugLog };
     });
 
-    console.log(`Found ${declinedMemberButtons.length} trial-declined members with MEMBERSHIP buttons`);
+    console.log('\nSearch debug log:');
+    declinedMemberButtons.debugLog.forEach(log => console.log(`  - ${log}`));
+
+    const memberButtonsList = declinedMemberButtons.results;
+
+    console.log(`Found ${memberButtonsList.length} trial-declined members with MEMBERSHIP buttons`);
 
     const members = [];
 
     // For each declined member, click their MEMBERSHIP button and extract data
-    for (let i = 0; i < declinedMemberButtons.length; i++) {
-        const { username, buttonIndex } = declinedMemberButtons[i];
-        console.log(`\nProcessing member ${i + 1}/${declinedMemberButtons.length}: @${username}`);
+    for (let i = 0; i < memberButtonsList.length; i++) {
+        const { username } = memberButtonsList[i];
+        console.log(`\nProcessing member ${i + 1}/${memberButtonsList.length}: @${username}`);
 
         try {
-            // Find and click the MEMBERSHIP button
-            const allButtons = await page.$$('button, [role="button"]');
-            if (buttonIndex >= allButtons.length) {
-                console.log('  Button index out of range, skipping');
+            // Find the MEMBERSHIP button for this specific user by looking for their username nearby
+            // Use XPath to find button near the username
+            const membershipBtn = await page.evaluateHandle((uname) => {
+                // Find the element containing this username
+                const allElements = [...document.querySelectorAll('*')];
+                for (const el of allElements) {
+                    const text = el.textContent || '';
+                    if (text.includes('@' + uname) && text.includes('MEMBERSHIP') && text.includes('Trial declined')) {
+                        // Found the row - now find the MEMBERSHIP button
+                        const buttons = el.querySelectorAll('button, [role="button"], [class*="button"]');
+                        for (const btn of buttons) {
+                            if (btn.textContent.includes('MEMBERSHIP')) {
+                                return btn;
+                            }
+                        }
+                        // Try finding any clickable with MEMBERSHIP
+                        const clickables = el.querySelectorAll('*');
+                        for (const c of clickables) {
+                            if (c.textContent.trim() === 'MEMBERSHIP' ||
+                                (c.textContent.includes('MEMBERSHIP') && c.textContent.length < 50)) {
+                                return c;
+                            }
+                        }
+                    }
+                }
+                return null;
+            }, username);
+
+            if (!membershipBtn) {
+                console.log('  Could not find MEMBERSHIP button, skipping');
                 continue;
             }
 
-            const membershipBtn = allButtons[buttonIndex];
             await membershipBtn.click();
             console.log('  Clicked MEMBERSHIP button');
 
