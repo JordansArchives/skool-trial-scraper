@@ -138,102 +138,84 @@ try {
     // Step 5: Find members with "Trial declined" status and click their MEMBERSHIP button
     console.log('Scanning for trial-declined members...');
 
-    // Debug: Check what's on the page
+    // Debug: Check what's on the page - look at HTML structure
     const pageDebug = await page.evaluate(() => {
         const pageText = document.body.innerText;
+        const pageHTML = document.body.innerHTML;
         const hasDeclined = pageText.includes('Trial declined');
-        const hasMembership = pageText.includes('MEMBERSHIP');
 
-        // Find all buttons
-        const allButtons = document.querySelectorAll('button, [role="button"]');
-        const buttonTexts = [...allButtons].slice(0, 20).map(b => b.textContent.trim().substring(0, 50));
+        // Look for MEMBERSHIP in different ways
+        const hasMembershipText = pageText.toUpperCase().includes('MEMBERSHIP');
+        const hasMembershipHTML = pageHTML.toUpperCase().includes('MEMBERSHIP');
 
-        // Find clickable elements with MEMBERSHIP
-        const membershipElements = [...document.querySelectorAll('*')].filter(
-            el => el.textContent.includes('MEMBERSHIP') && el.textContent.length < 100
-        );
+        // Find all clickable elements (buttons, links, divs with click handlers)
+        const clickables = document.querySelectorAll('button, a, [role="button"], [onclick], [class*="btn"], [class*="button"]');
+
+        // Sample of clickable elements' HTML
+        const clickableSamples = [...clickables].slice(0, 30).map(el => ({
+            tag: el.tagName,
+            text: el.textContent.trim().substring(0, 40),
+            classes: el.className.substring(0, 50)
+        }));
+
+        // Find Trial declined elements and their nearby structure
+        const declinedInfo = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while (node = walker.nextNode()) {
+            if (node.textContent.includes('Trial declined')) {
+                // Get parent structure
+                let parent = node.parentElement;
+                let structure = [];
+                for (let i = 0; i < 5 && parent; i++) {
+                    structure.push(parent.tagName + (parent.className ? '.' + parent.className.split(' ')[0] : ''));
+                    parent = parent.parentElement;
+                }
+                declinedInfo.push({
+                    text: node.textContent.substring(0, 50),
+                    structure: structure.join(' > ')
+                });
+            }
+        }
 
         return {
             hasDeclined,
-            hasMembership,
-            totalButtons: allButtons.length,
-            buttonSamples: buttonTexts,
-            membershipElementsCount: membershipElements.length
+            hasMembershipText,
+            hasMembershipHTML,
+            totalClickables: clickables.length,
+            clickableSamples,
+            declinedInfo
         };
     });
 
     console.log('Page debug info:');
-    console.log(`  - Has "Trial declined": ${pageDebug.hasDeclined}`);
-    console.log(`  - Has "MEMBERSHIP": ${pageDebug.hasMembership}`);
-    console.log(`  - Total buttons: ${pageDebug.totalButtons}`);
-    console.log(`  - MEMBERSHIP elements: ${pageDebug.membershipElementsCount}`);
-    console.log(`  - Button samples: ${pageDebug.buttonSamples.join(' | ')}`);
-
-    // New approach: Find all clickable MEMBERSHIP elements, then check if their row has "Trial declined"
-    const declinedMemberButtons = await page.evaluate(() => {
-        const results = [];
-        const debugLog = [];
-
-        // Find all elements that contain "MEMBERSHIP" text (the buttons)
-        const allElements = [...document.querySelectorAll('*')];
-        const membershipElements = allElements.filter(el => {
-            const text = el.textContent || '';
-            // Only match elements where MEMBERSHIP is a direct/near-direct child text
-            return text.includes('MEMBERSHIP') && text.length < 200;
-        });
-
-        debugLog.push(`Found ${membershipElements.length} elements with MEMBERSHIP text`);
-
-        // For each MEMBERSHIP element, check if its parent container has "Trial declined"
-        const processed = new Set();
-        for (const el of membershipElements) {
-            // Traverse up to find the member row
-            let container = el;
-            for (let i = 0; i < 15; i++) {
-                if (!container.parentElement) break;
-                container = container.parentElement;
-
-                const containerText = container.textContent || '';
-
-                // Check if this container has both MEMBERSHIP and Trial declined
-                if (containerText.includes('Trial declined') && containerText.includes('@')) {
-                    const usernameMatch = containerText.match(/@([a-z0-9-]+)/i);
-                    const username = usernameMatch ? usernameMatch[1] : null;
-
-                    if (username && !processed.has(username)) {
-                        processed.add(username);
-
-                        // Find the actual clickable element (the one with just MEMBERSHIP text)
-                        // Look for the most specific element containing MEMBERSHIP
-                        let clickTarget = el;
-                        const children = el.querySelectorAll('*');
-                        for (const child of children) {
-                            if (child.textContent.trim() === 'MEMBERSHIP' ||
-                                child.textContent.includes('MEMBERSHIP') && child.textContent.length < 50) {
-                                clickTarget = child;
-                            }
-                        }
-
-                        debugLog.push(`Found declined member: @${username}`);
-
-                        results.push({
-                            username,
-                            // Store selector info for clicking
-                            elementHTML: clickTarget.outerHTML.substring(0, 100)
-                        });
-                        break;
-                    }
-                }
-            }
-        }
-
-        return { results, debugLog };
+    console.log(`  - Has "Trial declined" in text: ${pageDebug.hasDeclined}`);
+    console.log(`  - Has "MEMBERSHIP" in text: ${pageDebug.hasMembershipText}`);
+    console.log(`  - Has "MEMBERSHIP" in HTML: ${pageDebug.hasMembershipHTML}`);
+    console.log(`  - Total clickable elements: ${pageDebug.totalClickables}`);
+    console.log(`  - Declined elements found: ${pageDebug.declinedInfo.length}`);
+    pageDebug.declinedInfo.forEach((info, i) => {
+        console.log(`    ${i + 1}. "${info.text}" - structure: ${info.structure}`);
     });
 
-    console.log('\nSearch debug log:');
-    declinedMemberButtons.debugLog.forEach(log => console.log(`  - ${log}`));
+    // Find usernames of declined members first (from text)
+    const declinedUsernames = await page.evaluate(() => {
+        const pageText = document.body.innerText;
+        const usernames = [];
 
-    const memberButtonsList = declinedMemberButtons.results;
+        // Find all "Trial declined" occurrences and extract username before each
+        const regex = /(@[a-z0-9-]+)[\s\S]{0,500}?Trial declined/gi;
+        let match;
+        while ((match = regex.exec(pageText)) !== null) {
+            usernames.push(match[1].substring(1)); // Remove @ prefix
+        }
+
+        return usernames;
+    });
+
+    console.log(`\nFound ${declinedUsernames.length} declined member usernames: ${declinedUsernames.join(', ')}`);
+
+    const memberButtonsList = declinedUsernames.map(username => ({ username }));
 
     console.log(`Found ${memberButtonsList.length} trial-declined members with MEMBERSHIP buttons`);
 
@@ -245,40 +227,141 @@ try {
         console.log(`\nProcessing member ${i + 1}/${memberButtonsList.length}: @${username}`);
 
         try {
-            // Find the MEMBERSHIP button for this specific user by looking for their username nearby
-            // Use XPath to find button near the username
-            const membershipBtn = await page.evaluateHandle((uname) => {
-                // Find the element containing this username
-                const allElements = [...document.querySelectorAll('*')];
-                for (const el of allElements) {
-                    const text = el.textContent || '';
-                    if (text.includes('@' + uname) && text.includes('MEMBERSHIP') && text.includes('Trial declined')) {
-                        // Found the row - now find the MEMBERSHIP button
-                        const buttons = el.querySelectorAll('button, [role="button"], [class*="button"]');
-                        for (const btn of buttons) {
-                            if (btn.textContent.includes('MEMBERSHIP')) {
-                                return btn;
-                            }
-                        }
-                        // Try finding any clickable with MEMBERSHIP
-                        const clickables = el.querySelectorAll('*');
-                        for (const c of clickables) {
-                            if (c.textContent.trim() === 'MEMBERSHIP' ||
-                                (c.textContent.includes('MEMBERSHIP') && c.textContent.length < 50)) {
-                                return c;
-                            }
-                        }
+            // Strategy 1: Use Playwright's getByText to find MEMBERSHIP near this user
+            // First scroll the user into view
+            await page.evaluate((uname) => {
+                const els = [...document.querySelectorAll('*')];
+                for (const el of els) {
+                    if (el.textContent.includes('@' + uname) && el.textContent.length < 500) {
+                        el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                        break;
                     }
                 }
-                return null;
             }, username);
+            await page.waitForTimeout(500);
 
-            if (!membershipBtn) {
-                console.log('  Could not find MEMBERSHIP button, skipping');
-                continue;
+            // Try multiple approaches to find and click MEMBERSHIP button
+            let clicked = false;
+
+            // Approach 1: Try Playwright's getByRole with name
+            try {
+                const btn = page.getByRole('button', { name: /membership/i }).first();
+                if (await btn.count() > 0) {
+                    // Check if this button is near our username
+                    const nearUser = await page.evaluate((uname) => {
+                        const btns = [...document.querySelectorAll('button')];
+                        for (const btn of btns) {
+                            if (btn.textContent.toLowerCase().includes('membership')) {
+                                let parent = btn.parentElement;
+                                for (let i = 0; i < 10 && parent; i++) {
+                                    if (parent.textContent.includes('@' + uname)) {
+                                        return true;
+                                    }
+                                    parent = parent.parentElement;
+                                }
+                            }
+                        }
+                        return false;
+                    }, username);
+
+                    if (nearUser) {
+                        await btn.click();
+                        clicked = true;
+                        console.log('  Clicked via getByRole');
+                    }
+                }
+            } catch (e) { /* continue to next approach */ }
+
+            // Approach 2: Find by looking for the second button (after CHAT) in member row
+            if (!clicked) {
+                try {
+                    clicked = await page.evaluate((uname) => {
+                        const els = [...document.querySelectorAll('*')];
+                        for (const el of els) {
+                            const text = el.textContent || '';
+                            // Find the member row (contains username and Trial declined)
+                            if (text.includes('@' + uname) && text.includes('Trial declined') && text.length < 2000) {
+                                // Find all button-like elements
+                                const buttons = el.querySelectorAll('button, [role="button"], a[class*="btn"], div[class*="btn"]');
+                                // Look for one that has MEMBERSHIP or is the second one (after CHAT)
+                                let chatFound = false;
+                                for (const btn of buttons) {
+                                    const btnText = btn.textContent.toUpperCase();
+                                    if (btnText.includes('MEMBERSHIP')) {
+                                        btn.click();
+                                        return true;
+                                    }
+                                    if (btnText.includes('CHAT')) {
+                                        chatFound = true;
+                                    } else if (chatFound && btn.offsetWidth > 0) {
+                                        // This might be MEMBERSHIP (it's after CHAT)
+                                        btn.click();
+                                        return true;
+                                    }
+                                }
+
+                                // Approach 3: Look for gear/settings icon (SVG)
+                                const svgs = el.querySelectorAll('svg');
+                                for (const svg of svgs) {
+                                    const parent = svg.parentElement;
+                                    if (parent && parent.offsetWidth > 0) {
+                                        // Check if it's near a MEMBERSHIP-like element
+                                        const nearText = parent.textContent || parent.parentElement?.textContent || '';
+                                        if (nearText.toUpperCase().includes('MEMBERSHIP') ||
+                                            nearText.toUpperCase().includes('SETTING')) {
+                                            parent.click();
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return false;
+                    }, username);
+
+                    if (clicked) console.log('  Clicked via DOM search');
+                } catch (e) {
+                    console.log(`  DOM search error: ${e.message}`);
+                }
             }
 
-            await membershipBtn.click();
+            // Approach 3: Use keyboard navigation - focus on the row and tab to MEMBERSHIP
+            if (!clicked) {
+                console.log('  Could not find MEMBERSHIP button with standard approaches');
+                console.log('  Trying text-based click...');
+
+                // Try clicking any element containing MEMBERSHIP text near this user
+                try {
+                    await page.evaluate((uname) => {
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            if (node.textContent.toUpperCase().includes('MEMBERSHIP')) {
+                                // Check if this is near our user
+                                let parent = node.parentElement;
+                                for (let i = 0; i < 15 && parent; i++) {
+                                    if (parent.textContent.includes('@' + uname)) {
+                                        // Click the immediate parent of the text node
+                                        node.parentElement.click();
+                                        return true;
+                                    }
+                                    parent = parent.parentElement;
+                                }
+                            }
+                        }
+                        return false;
+                    }, username);
+                    clicked = true;
+                    console.log('  Clicked via text walker');
+                } catch (e) {
+                    console.log(`  Text walker error: ${e.message}`);
+                }
+            }
+
+            if (!clicked) {
+                console.log('  All approaches failed, skipping this member');
+                continue;
+            }
             console.log('  Clicked MEMBERSHIP button');
 
             // Wait for modal to appear
